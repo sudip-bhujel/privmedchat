@@ -1,0 +1,7 @@
+[project]
+name = "privmedchat"
+version = "0.1.0"
+description = "Privacy-Preserving Alignment for Clinical LLMs: Differential Privacy in RLHF for Secure Medical Personalization"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []
