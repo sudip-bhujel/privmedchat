@@ -1,7 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "privmedchat"
 version = "0.1.0"
-description = "Privacy-Preserving Alignment for Clinical LLMs: Differential Privacy in RLHF for Secure Medical Personalization"
+description = "Privacy-Preserving Alignment for Clinical LLMs"
 readme = "README.md"
-requires-python = ">=3.14"
-dependencies = []
+requires-python = ">=3.13"
+dependencies = [
+    "torch>=2.9.0",
+    "transformers",
+    "datasets",
+    "accelerate",
+    "peft>=0.17.1",
+    "trl>=0.24.0",
+    "opacus>=1.5.4",
+    "omegaconf>=2.3.0",
+    "wandb>=0.23.0",
+    "tqdm>=4.67.1",
+    "rouge-score",
+    "bert-score",
+    "scikit-learn",
+    "matplotlib>=3.10.7",
+    "sentence-transformers",
+    "numpy>=1.26.4",
+    "scispacy>=0.6.2",
+]
+
+[project.optional-dependencies]
+scispacy = ["scispacy"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["dataset_builder*", "sft*", "reward_model*", "ppo*", "evaluate*"]
