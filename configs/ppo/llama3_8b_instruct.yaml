@@ -1,0 +1,43 @@
+model_name: "meta-llama/Meta-Llama-3-8B-Instruct"
+preference_pairs_file: "./data/preference_pairs.jsonl"
+output_dir: "./ckpts/ppo_llama3_8b_instruct"
+num_iterations: 10
+epochs_per_iteration: 3
+rollout_batch_size: 8
+max_new_tokens: 256
+max_rollout_prompts: 512
+batch_size: 16
+max_physical_batch_size: 4
+clip_epsilon: 0.2
+beta_kl: 0.1
+device: "cuda:0"
+
+actor:
+  device: "cuda:0"
+  lr: 5e-6
+  lora:
+    r: 8
+    alpha: 32
+    dropout: 0.1
+
+critic:
+  device: "cuda:1"
+  lr: 5e-6
+  lora:
+    r: 8
+    alpha: 32
+    dropout: 0.1
+
+ref:
+  device: "cuda:2"
+
+rm:
+  model_path: "./ckpts/llama3_8b_instruct/epoch_3"
+  device: "cuda:2"
+
+enable_dp: false
+
+wandb:
+  project: "ppo_training"
+  name: "ppo_llama3_8b_instruct"
+  entity: "privmedchat"
