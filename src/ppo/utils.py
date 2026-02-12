@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import gc
 import os
+from typing import TYPE_CHECKING
 
 import torch
 from tqdm import tqdm
 
-from ppo.model import ActorCritic
+if TYPE_CHECKING:
+    from ppo.model import ActorCritic
 
 
 def ppo_loss_fn(

@@ -179,14 +179,14 @@ class ActorCritic(nn.Module):
 
     def offload_inference_models(self) -> None:
         """Move frozen ref & reward models to CPU to free GPU memory for training."""
-        self.ref_model.to("cpu")
+        self.ref_model.to("cpu")  # type: ignore
         self.reward_model.to("cpu")
         clean_memory()
         print("Inference models (ref, RM) offloaded to CPU.")
 
     def reload_inference_models(self) -> None:
         """Move frozen ref & reward models back to their GPUs for rollouts/eval."""
-        self.ref_model.to(self.ref_device)
+        self.ref_model.to(self.ref_device)  # type: ignore
         self.reward_model.to(self.rm_device)
         clean_memory()
         print("Inference models (ref, RM) reloaded to GPU.")
