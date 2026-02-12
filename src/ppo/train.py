@@ -8,6 +8,7 @@ import warnings
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import wandb
 from datasets import load_dataset
 from omegaconf import OmegaConf
@@ -66,7 +67,7 @@ def evaluate(
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=tokenizer.model_max_length,
+            max_length=min(tokenizer.model_max_length, 8192),
         ).to(device)
         prompt_len = inputs.input_ids.shape[1]
 
@@ -149,12 +150,14 @@ def _actor_step(
     rewards = batch["rewards"].float().to(device)
 
     actor_logits = model.forward_actor(input_ids=input_ids, attention_mask=None)
-    actor_token_logits = torch.gather(
-        actor_logits, -1, input_ids.unsqueeze(-1)
-    ).squeeze(-1)
-    actor_logsumexp = torch.logsumexp(actor_logits, dim=-1)
-    current_taken_log_probs = actor_token_logits - actor_logsumexp
-    del actor_logits, actor_token_logits, actor_logsumexp
+    # Use F.cross_entropy (fused kernel) to avoid materializing full [B,T,V]
+    # log_softmax tensor — saves ~500MB+ GPU memory per step for large vocabs.
+    current_taken_log_probs = -F.cross_entropy(
+        actor_logits.view(-1, actor_logits.size(-1)),
+        input_ids.view(-1),
+        reduction="none",
+    ).view(input_ids.shape)
+    del actor_logits
 
     with torch.no_grad():
         values = model.forward_critic(input_ids, attention_mask=None).to(device)
@@ -182,12 +185,12 @@ def _critic_step(model, batch, device, beta_kl):
 
     with torch.no_grad():
         actor_logits = model.forward_actor(input_ids=input_ids, attention_mask=None)
-        actor_token_logits = torch.gather(
-            actor_logits, -1, input_ids.unsqueeze(-1)
-        ).squeeze(-1)
-        actor_logsumexp = torch.logsumexp(actor_logits, dim=-1)
-        current_taken_log_probs = actor_token_logits - actor_logsumexp
-        del actor_logits, actor_token_logits, actor_logsumexp
+        current_taken_log_probs = -F.cross_entropy(
+            actor_logits.view(-1, actor_logits.size(-1)),
+            input_ids.view(-1),
+            reduction="none",
+        ).view(input_ids.shape)
+        del actor_logits
 
     values = model.forward_critic(input_ids, attention_mask=None)
 
@@ -323,6 +326,7 @@ def main() -> None:
         project=config.wandb.project,
         entity=config.wandb.entity,
         name=config.wandb.name,
+        group=config.wandb.get("group", None),
         config=OmegaConf.to_container(config, resolve=True),  # type: ignore[arg-type],
     )
 
@@ -519,6 +523,9 @@ def main() -> None:
         clean_memory()
         ppo_system.train()
 
+        # Offload ref & RM to CPU — only actor+critic needed during training
+        ppo_system.offload_inference_models()
+
         iteration_loss = 0.0
 
         for ppo_epoch in range(1, config.epochs_per_iteration + 1):
@@ -565,6 +572,9 @@ def main() -> None:
             clean_memory()
 
         iteration_loss /= config.epochs_per_iteration
+
+        # Reload ref & RM to GPU before eval / next rollout
+        ppo_system.reload_inference_models()
 
         actor_scheduler.step()
         critic_scheduler.step()

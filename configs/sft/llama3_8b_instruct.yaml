@@ -20,6 +20,7 @@ lora:
 enable_dp: false
 device: "cuda"
 wandb:
-  project: "sft_training"
+  project: "privmedchat"
+  group: "sft"
   name: "sft_llama3_8b_instruct"
   entity: "privmedchat"

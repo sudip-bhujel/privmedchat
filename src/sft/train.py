@@ -275,6 +275,7 @@ def main() -> None:
         project=config.wandb.project,
         entity=config.wandb.entity,
         name=config.wandb.name,
+        group=config.wandb.get("group", None),
         config=OmegaConf.to_container(config, resolve=True),  # type: ignore[arg-type]
     )
 

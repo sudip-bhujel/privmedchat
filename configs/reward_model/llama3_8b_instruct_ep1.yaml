@@ -1,6 +1,6 @@
 model_name: "meta-llama/Meta-Llama-3-8B-Instruct"
 preference_pairs_file: "./data/preference_pairs.jsonl"
-output_dir: "./ckpts/llama3_8b_instruct_rm_ep1"
+output_dir: "./ckpts/rm_llama3_8b_instruct_ep1"
 batch_size: 64
 max_physical_batch_size: 2
 eval_batch_size: 2
@@ -20,6 +20,7 @@ target_delta: 1e-5
 max_grad_norm: 1.0
 device: "cuda"
 wandb:
-  project: "reward_model_training"
-  name: "llama3_8b_instruct_rm_ep1"
+  project: "privmedchat"
+  group: "reward_model"
+  name: "rm_llama3_8b_instruct_ep1"
   entity: "privmedchat"

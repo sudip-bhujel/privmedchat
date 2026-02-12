@@ -23,6 +23,7 @@ target_delta: 1e-5
 max_grad_norm: 1.0
 device: "cuda"
 wandb:
-  project: "sft_training"
+  project: "privmedchat"
+  group: "sft"
   name: "sft_llama3_8b_instruct_dp_ep1"
   entity: "privmedchat"

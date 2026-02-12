@@ -86,7 +86,9 @@ def collect_rollouts(
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ]
-            text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
             formatted_prompts.append(text)
 
         inputs = tokenizer(
@@ -94,7 +96,7 @@ def collect_rollouts(
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=tokenizer.model_max_length,
+            max_length=min(tokenizer.model_max_length, 8192),
         ).to(device)
         prompt_len = inputs.input_ids.shape[1]
 
@@ -107,7 +109,9 @@ def collect_rollouts(
             pad_token_id=tokenizer.pad_token_id,
         )
 
-        rm_scores = model.get_reward_score(input_ids=outputs, attention_mask=torch.ones_like(outputs))
+        rm_scores = model.get_reward_score(
+            input_ids=outputs, attention_mask=torch.ones_like(outputs)
+        )
         ref_token_log_probs = model.get_ref_token_log_probs(outputs)
         old_token_log_probs = model.get_actor_token_log_probs(outputs)
 
@@ -129,7 +133,14 @@ def collect_rollouts(
                 }
             )
 
-        del inputs, outputs, rm_scores, ref_token_log_probs, old_token_log_probs, action_mask
+        del (
+            inputs,
+            outputs,
+            rm_scores,
+            ref_token_log_probs,
+            old_token_log_probs,
+            action_mask,
+        )
         clean_memory()
 
     return rollouts

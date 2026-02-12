@@ -10,6 +10,7 @@ import torch.nn as nn
 from peft import LoraConfig, PeftModel, get_peft_model
 from transformers import AutoModel, AutoModelForCausalLM
 
+from ppo.utils import clean_memory
 from reward_model.model import MedRewardModel
 
 
@@ -175,3 +176,17 @@ class ActorCritic(nn.Module):
             max_new_tokens=max_new_tokens,
             **generate_kwargs,
         )
+
+    def offload_inference_models(self) -> None:
+        """Move frozen ref & reward models to CPU to free GPU memory for training."""
+        self.ref_model.to("cpu")
+        self.reward_model.to("cpu")
+        clean_memory()
+        print("Inference models (ref, RM) offloaded to CPU.")
+
+    def reload_inference_models(self) -> None:
+        """Move frozen ref & reward models back to their GPUs for rollouts/eval."""
+        self.ref_model.to(self.ref_device)
+        self.reward_model.to(self.rm_device)
+        clean_memory()
+        print("Inference models (ref, RM) reloaded to GPU.")

@@ -7,7 +7,7 @@ rollout_batch_size: 8
 max_new_tokens: 256
 max_rollout_prompts: 512
 batch_size: 16
-max_physical_batch_size: 4
+max_physical_batch_size: 2
 clip_epsilon: 0.2
 beta_kl: 0.1
 device: "cuda:0"
@@ -32,12 +32,13 @@ ref:
   device: "cuda:2"
 
 rm:
-  model_path: "./ckpts/llama3_8b_instruct/epoch_3"
+  model_path: "./ckpts/rm_llama3_8b_instruct/epoch_3"
   device: "cuda:2"
 
 enable_dp: false
 
 wandb:
-  project: "ppo_training"
+  project: "privmedchat"
+  group: "ppo"
   name: "ppo_llama3_8b_instruct"
   entity: "privmedchat"
