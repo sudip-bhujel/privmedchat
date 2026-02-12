@@ -1,0 +1,25 @@
+model_name: "meta-llama/Meta-Llama-3-8B-Instruct"
+preference_pairs_file: "./data/preference_pairs.jsonl"
+output_dir: "./ckpts/llama3_8b_instruct_rm_ep1"
+batch_size: 64
+max_physical_batch_size: 2
+eval_batch_size: 2
+num_epochs: 3
+max_seq_length: 1024
+gradient_checkpointing: true
+torch_dtype: "bfloat16"
+lr: 5e-5
+weight_decay: 0.05
+lora:
+  r: 8
+  alpha: 16
+  dropout: 0.2
+enable_dp: true
+target_epsilon: 1.0
+target_delta: 1e-5
+max_grad_norm: 1.0
+device: "cuda"
+wandb:
+  project: "reward_model_training"
+  name: "llama3_8b_instruct_rm_ep1"
+  entity: "privmedchat"
