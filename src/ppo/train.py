@@ -142,7 +142,11 @@ def _split_batch(batch, chunk_size: int):
 def _actor_step(
     model, batch, device, clip_epsilon, beta_kl, old_log_probs_key="old_log_probs"
 ):
-    """Compute actor (policy) loss for a single micro-batch. Returns scalar loss."""
+    """Compute actor (policy) loss for a single micro-batch.
+
+    Returns (actor_loss, kl_mean) where kl_mean is the mean per-token KL
+    divergence between the current policy and the reference model (detached).
+    """
     input_ids = batch["input_ids"].to(device)
     action_mask = batch["action_mask"].to(device)
     old_log_probs = batch["old_log_probs"].to(device)
@@ -173,7 +177,10 @@ def _actor_step(
 
     valid_tokens = action_mask.sum()
     actor_loss = (actor_loss * action_mask).sum() / valid_tokens
-    return actor_loss
+
+    # Mean KL for logging (detached)
+    kl_mean = (kl_penalty.detach() * action_mask).sum() / valid_tokens
+    return actor_loss, kl_mean.item()
 
 
 def _critic_step(model, batch, device, beta_kl):
@@ -225,6 +232,7 @@ def train_epoch(
     model.train()
     total_actor_loss = 0.0
     total_critic_loss = 0.0
+    total_kl = 0.0
     actor_steps = 0
     critic_steps = 0
 
@@ -237,10 +245,13 @@ def train_epoch(
         ) as actor_dataloader:
             for batch in tqdm(actor_dataloader, desc=f"Iteration {iteration} [Actor]"):
                 actor_optim.zero_grad()
-                actor_loss = _actor_step(model, batch, device, clip_epsilon, beta_kl)
+                actor_loss, kl_mean = _actor_step(
+                    model, batch, device, clip_epsilon, beta_kl
+                )
                 actor_loss.backward()
                 actor_optim.step()
                 total_actor_loss += actor_loss.item()
+                total_kl += kl_mean
                 actor_steps += 1
                 del actor_loss
                 clean_memory()
@@ -249,13 +260,18 @@ def train_epoch(
             mini_batches = _split_batch(batch, max_physical_batch_size)
             actor_optim.zero_grad()
             accumulated_loss = 0.0
+            accumulated_kl = 0.0
             for mb in mini_batches:
-                actor_loss = _actor_step(model, mb, device, clip_epsilon, beta_kl)
+                actor_loss, kl_mean = _actor_step(
+                    model, mb, device, clip_epsilon, beta_kl
+                )
                 (actor_loss / len(mini_batches)).backward()
                 accumulated_loss += actor_loss.item()
+                accumulated_kl += kl_mean
                 del actor_loss
             actor_optim.step()
             total_actor_loss += accumulated_loss
+            total_kl += accumulated_kl / len(mini_batches)
             actor_steps += 1
             clean_memory()
 
@@ -296,12 +312,14 @@ def train_epoch(
 
     avg_actor_loss = total_actor_loss / actor_steps if actor_steps else 0.0
     avg_critic_loss = total_critic_loss / critic_steps if critic_steps else 0.0
+    avg_kl = total_kl / actor_steps if actor_steps else 0.0
     avg_loss = avg_actor_loss + avg_critic_loss
 
     log_dict: dict = {
         "train/actor_loss": avg_actor_loss,
         "train/critic_loss": avg_critic_loss,
         "train/loss": avg_loss,
+        "train/kl_divergence": avg_kl,
         "iteration": iteration,
         "global_step": step_counter,
         "ppo_epoch": epoch,
@@ -365,6 +383,7 @@ def main() -> None:
         c_device=config.critic.device,
         ref_device=config.ref.device,
         rm_device=config.rm.device,
+        sft_checkpoint=config.get("sft_checkpoint", None),
     )
 
     tokenizer = AutoTokenizer.from_pretrained(config.model_name)

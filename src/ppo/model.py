@@ -27,6 +27,7 @@ class ActorCritic(nn.Module):
         c_device: str = "auto",
         ref_device: str = "auto",
         rm_device: str = "auto",
+        sft_checkpoint: str | None = None,
     ):
         super().__init__()
 
@@ -35,17 +36,49 @@ class ActorCritic(nn.Module):
         self.ref_device = ref_device
         self.rm_device = rm_device
 
-        self.actor_base = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map=a_device,
-        )
+        dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+
+        # ── Actor: start from SFT-merged weights when available ──────
+        if sft_checkpoint:
+            print(f"Loading actor from SFT checkpoint: {sft_checkpoint}")
+            sft_adapter_cfg = os.path.join(sft_checkpoint, "adapter_config.json")
+            if os.path.exists(sft_adapter_cfg):
+                # SFT saved as LoRA adapter → load base + merge SFT adapter
+                base = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    dtype=dtype,
+                    device_map=a_device,
+                )
+                sft_model = PeftModel.from_pretrained(base, sft_checkpoint)
+                self.actor_base = sft_model.merge_and_unload()
+                # Remove residual PEFT attributes so get_peft_model applies cleanly
+                for attr in ("peft_config", "active_adapter", "active_adapters"):
+                    try:
+                        delattr(self.actor_base, attr)
+                    except (AttributeError, TypeError):
+                        pass
+            else:
+                # SFT saved as full model
+                self.actor_base = AutoModelForCausalLM.from_pretrained(
+                    sft_checkpoint,
+                    dtype=dtype,
+                    device_map=a_device,
+                )
+        else:
+            print(
+                "Warning: No SFT checkpoint provided — actor starts from raw pretrained model."
+            )
+            self.actor_base = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                dtype=dtype,
+                device_map=a_device,
+            )
         self.actor = get_peft_model(self.actor_base, actor_lora_config)
         self.actor.print_trainable_parameters()
 
         self.critic_base = AutoModel.from_pretrained(
             model_name,
-            dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            dtype=dtype,
             device_map=c_device,
         )
         self.critic_backbone = get_peft_model(self.critic_base, critic_lora_config)
@@ -57,17 +90,35 @@ class ActorCritic(nn.Module):
         )
         self.value_head.weight.requires_grad_(True)
 
-        self.ref_model = AutoModelForCausalLM.from_pretrained(
-            model_name,
-            dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map=ref_device,
-        )
+        # ── Reference model: same as actor init (SFT-merged) ────────
+        if sft_checkpoint:
+            sft_adapter_cfg = os.path.join(sft_checkpoint, "adapter_config.json")
+            if os.path.exists(sft_adapter_cfg):
+                ref_base = AutoModelForCausalLM.from_pretrained(
+                    model_name,
+                    dtype=dtype,
+                    device_map=ref_device,
+                )
+                ref_peft = PeftModel.from_pretrained(ref_base, sft_checkpoint)
+                self.ref_model = ref_peft.merge_and_unload()
+            else:
+                self.ref_model = AutoModelForCausalLM.from_pretrained(
+                    sft_checkpoint,
+                    dtype=dtype,
+                    device_map=ref_device,
+                )
+        else:
+            self.ref_model = AutoModelForCausalLM.from_pretrained(
+                model_name,
+                dtype=dtype,
+                device_map=ref_device,
+            )
         self.ref_model.eval()
         self.ref_model.requires_grad_(False)
 
         self.rm_base = AutoModel.from_pretrained(
             model_name,
-            dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            dtype=dtype,
             device_map=rm_device,
         )
         # Load the LoRA adapter trained during reward-model fine-tuning

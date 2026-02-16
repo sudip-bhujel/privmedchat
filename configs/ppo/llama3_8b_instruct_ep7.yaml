@@ -1,4 +1,5 @@
 model_name: "meta-llama/Meta-Llama-3-8B-Instruct"
+sft_checkpoint: "./ckpts/sft_llama3_8b_instruct_dp_ep7/epoch_3"
 preference_pairs_file: "./data/preference_pairs.jsonl"
 output_dir: "./ckpts/ppo_llama3_8b_instruct_ep7"
 num_iterations: 10

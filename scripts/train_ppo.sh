@@ -48,10 +48,10 @@ singularity exec --nv "$IMG" bash -lc '
   nvidia-smi || true
   
   uv sync
-  uv run -m ppo.train configs/ppo/llama3_8b_instruct_dp_ep1.yaml
-  # uv run -m ppo.train configs/ppo/llama3_8b_instruct_dp_ep3.yaml 
-  # uv run -m ppo.train configs/ppo/llama3_8b_instruct_dp_ep5.yaml
-  # uv run -m ppo.train configs/ppo/llama3_8b_instruct_dp_ep7.yaml
-  # uv run -m ppo.train configs/ppo/llama3_8b_instruct.yaml
+  #uv run -m ppo.train configs/ppo/llama3_8b_instruct.yaml
+  # uv run -m ppo.train configs/ppo/llama3_8b_instruct_ep1.yaml
+  # uv run -m ppo.train configs/ppo/llama3_8b_instruct_ep3.yaml 
+  uv run -m ppo.train configs/ppo/llama3_8b_instruct_ep5.yaml
+  # uv run -m ppo.train configs/ppo/llama3_8b_instruct_ep7.yaml
   echo "---- Container execution completed ----"
 '
