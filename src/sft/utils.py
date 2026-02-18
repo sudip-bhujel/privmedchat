@@ -33,11 +33,23 @@ def print_trainable_parameters(model) -> None:
 
 
 def save_sft_model(model, tokenizer, output_dir: str, epoch: int | None = None) -> str:
-    """Save fine-tuned model and tokenizer."""
-    save_dir = output_dir if epoch is None else os.path.join(output_dir, f"epoch_{epoch}")
+    """Save fine-tuned model and tokenizer.
+
+    Handles nested wrappers that appear in distributed / DP training:
+      GradSampleModule (``_module``) -> DPDDP/DDP (``module``) -> PEFT model
+    """
+    save_dir = (
+        output_dir if epoch is None else os.path.join(output_dir, f"epoch_{epoch}")
+    )
     os.makedirs(save_dir, exist_ok=True)
 
-    model_to_save = model._module if hasattr(model, "_module") else model
+    model_to_save = model
+    # Unwrap Opacus GradSampleModule
+    if hasattr(model_to_save, "_module"):
+        model_to_save = model_to_save._module
+    # Unwrap DDP / DPDDP
+    if hasattr(model_to_save, "module"):
+        model_to_save = model_to_save.module
     model_to_save.save_pretrained(save_dir)
     tokenizer.save_pretrained(save_dir)
 
