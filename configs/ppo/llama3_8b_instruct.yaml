@@ -37,6 +37,7 @@ rm:
   device: "cuda:2"
 
 enable_dp: false
+privacy_mode: "non_private"
 
 wandb:
   project: "privmedchat"

@@ -50,6 +50,8 @@ from sft.utils import determine_device, print_trainable_parameters, save_sft_mod
 
 def _is_distributed() -> bool:
     """True when launched via ``torchrun`` / ``torch.distributed.run``."""
+    if "LOCAL_RANK" not in os.environ:
+        return False
     return int(os.environ.get("WORLD_SIZE", "1")) > 1
 
 
@@ -75,6 +77,8 @@ def _setup_distributed(backend: str = "nccl") -> None:
     ``torchrun`` sets ``MASTER_ADDR``, ``MASTER_PORT``, ``RANK``,
     ``LOCAL_RANK``, and ``WORLD_SIZE`` automatically.
     """
+    if _world_size() <= 1:
+        return
     if not dist.is_initialized():
         dist.init_process_group(backend=backend)
         torch.cuda.set_device(_local_rank())
@@ -443,11 +447,13 @@ def main() -> None:
         enable_dp = bool(config.get("enable_dp", False))  # type: ignore[attr-defined]
 
         # ── DataLoaders ──────────────────────────────────────────────
-        # For DP+DDP, Opacus replaces the loader with DPDataLoader (Poisson
-        # sampling), so we must NOT add a DistributedSampler to the train set.
-        # For non-DP+DDP, DistributedSampler shards data across ranks.
+        # For DDP (with or without DP), use DistributedSampler to shard
+        # data across ranks.  When DP is enabled we disable Opacus's
+        # default Poisson sampling (which can give each rank a different
+        # batch count, causing NCCL ALLREDUCE deadlocks) and rely on
+        # uniform subsampling via DistributedSampler instead.
         train_sampler: DistributedSampler | None = None
-        if distributed and not enable_dp:
+        if distributed:
             train_sampler = DistributedSampler(
                 train_dataset, num_replicas=_world_size(), rank=_global_rank()
             )
@@ -457,6 +463,7 @@ def main() -> None:
             batch_size=config.batch_size,
             shuffle=(train_sampler is None),
             sampler=train_sampler,
+            drop_last=distributed,  # ensure equal batch count across ranks
         )  # type: ignore
         eval_loader = DataLoader(
             eval_dataset, batch_size=config.batch_size, shuffle=False
@@ -465,7 +472,8 @@ def main() -> None:
         # ── Model ────────────────────────────────────────────────────
         base_model = AutoModelForCausalLM.from_pretrained(
             config.model_name,
-            dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            low_cpu_mem_usage=True,
         )
 
         lora_cfg = LoraConfig(
@@ -510,6 +518,7 @@ def main() -> None:
                     epochs=config.num_epochs,
                     max_grad_norm=config.max_grad_norm,
                     grad_sample_mode="ghost",
+                    poisson_sampling=not distributed,
                 )
             )
         else:
@@ -532,6 +541,8 @@ def main() -> None:
             wandb.config.update({"actual_noise_multiplier": optimizer.noise_multiplier})  # type: ignore[attr-defined]
 
         # ── Log DP accounting parameters ─────────────────────────────
+        dp_accounting: dict[str, Any] | None = None
+        accounting_path: Path | None = None
         if enable_dp and _is_main_process():
             n_samples = len(train_dataset)
             q = config.max_physical_batch_size / n_samples if n_samples > 0 else 0
@@ -576,6 +587,10 @@ def main() -> None:
                 lr_scheduler=lr_scheduler,
             )
 
+            # Synchronise ranks before eval to avoid training/eval overlap.
+            if distributed:
+                dist.barrier()
+
             # All ranks must run eval to keep DDP's NCCL ops in sync.
             eval_loss = _evaluate(model, eval_loader, eval_criterion, device)
             if _is_main_process():
@@ -584,10 +599,13 @@ def main() -> None:
                 save_sft_model(model, tokenizer, config.output_dir, epoch=epoch)
 
         if enable_dp and privacy_engine is not None and _is_main_process():
-            print(
-                f"Final privacy epsilon: "
-                f"{privacy_engine.get_epsilon(config.target_delta):.4f}"
-            )
+            realized_epsilon = privacy_engine.get_epsilon(config.target_delta)
+            if dp_accounting is not None and accounting_path is not None:
+                dp_accounting["dp_realized_epsilon"] = realized_epsilon
+                accounting_path.write_text(
+                    json.dumps(dp_accounting, indent=2), encoding="utf-8"
+                )
+            print(f"Final privacy epsilon: {realized_epsilon:.4f}")
 
         if _is_main_process():
             wandb.finish()

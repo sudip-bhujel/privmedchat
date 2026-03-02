@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import warnings
+from pathlib import Path
 from typing import Any
 
 import torch
@@ -27,6 +29,15 @@ from reward_model.utils import (
     print_trainable_parameters,
     save_reward_model,
 )
+
+
+def _save_dp_accounting(output_dir: str, accounting: dict[str, Any]) -> Path:
+    """Persist DP accounting JSON to the training output directory."""
+    out_dir = Path(str(output_dir))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "dp_accounting.json"
+    out_path.write_text(json.dumps(accounting, indent=2), encoding="utf-8")
+    return out_path
 
 
 class OpacusPairwiseLoss(nn.Module):
@@ -409,12 +420,14 @@ def main() -> None:
         base_model = AutoModel.from_pretrained(
             config.model_name,
             dtype=model_dtype,
+            low_cpu_mem_usage=True,
         )
     except TypeError:
         # Backward-compat for older Transformers versions.
         base_model = AutoModel.from_pretrained(
             config.model_name,
             torch_dtype=model_dtype,
+            low_cpu_mem_usage=True,
         )
 
     peft_config = LoraConfig(
@@ -506,6 +519,36 @@ def main() -> None:
             f"DP training initiated with noise multiplier: {optimizer.noise_multiplier}"  # type: ignore[misc]
         )
 
+    if enable_dp:
+        n_samples = len(train_dataset)  # type: ignore[arg-type]
+        q = (
+            config.max_physical_batch_size / n_samples  # type: ignore[operator]
+            if n_samples > 0
+            else 0.0
+        )
+        dp_accounting = {
+            "stage": "RM",
+            "dp_enable_dp": True,
+            "dp_n_samples": n_samples,
+            "dp_sampling_probability_q": q,
+            "dp_total_steps_T": total_steps,
+            "dp_epochs": config.num_epochs,
+            "dp_max_grad_norm_C": config.max_grad_norm,
+            "dp_target_epsilon": config.target_epsilon,
+            "dp_target_delta": config.target_delta,
+            "dp_noise_multiplier_sigma": getattr(optimizer, "noise_multiplier", None),
+        }
+        wandb.config.update(dp_accounting)  # type: ignore[attr-defined]
+    else:
+        dp_accounting = {
+            "stage": "RM",
+            "dp_enable_dp": False,
+            "dp_n_samples": len(train_dataset),  # type: ignore[arg-type]
+            "dp_sampling_probability_q": 0.0,
+            "dp_total_steps_T": total_steps,
+            "dp_epochs": config.num_epochs,
+        }
+
     step_counter = 0
 
     for epoch in range(1, config.num_epochs + 1):
@@ -530,9 +573,12 @@ def main() -> None:
         print(f"Evaluation Accuracy: {acc * 100:.2f}%")
 
     if enable_dp:
-        print(
-            f"Final privacy epsilon: {privacy_engine.get_epsilon(config.target_delta):.4f}"
-        )
+        realized_epsilon = privacy_engine.get_epsilon(config.target_delta)
+        dp_accounting["dp_realized_epsilon"] = realized_epsilon
+        print(f"Final privacy epsilon: {realized_epsilon:.4f}")
+
+    accounting_path = _save_dp_accounting(str(config.output_dir), dp_accounting)
+    print(f"RM DP accounting saved: {accounting_path}")
 
     wandb.finish()
     print("Done")

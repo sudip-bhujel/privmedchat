@@ -37,6 +37,7 @@ rm:
   device: "cuda:2"
 
 enable_dp: true
+privacy_mode: "dp_ppo"
 dp:
   actor:
     target_epsilon: 3.0

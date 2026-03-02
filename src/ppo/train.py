@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import math
 import random
 import sys
 import warnings
+from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -25,6 +29,112 @@ from ppo.dataset import PPODataset, extract_prompts_from_dataset, ppo_collate_fn
 from ppo.model import ActorCritic
 from ppo.utils import clean_memory, collect_rollouts, save_ppo_model
 from reward_model.utils import determine_device
+
+
+def _validate_privacy_mode(config) -> tuple[str, bool]:
+    """Validate PPO privacy mode against DP config flags."""
+    enable_dp = bool(config.get("enable_dp", True))  # type: ignore[attr-defined]
+    privacy_mode = str(
+        config.get("privacy_mode", "dp_ppo" if enable_dp else "non_private")
+    ).strip()
+    normalized_mode = privacy_mode.lower()
+
+    valid_modes = {"dp_ppo", "non_private"}
+    if normalized_mode not in valid_modes:
+        raise ValueError(
+            f"Unsupported privacy_mode={privacy_mode!r}. Expected one of {sorted(valid_modes)}."
+        )
+
+    if normalized_mode == "dp_ppo":
+        if not enable_dp:
+            raise ValueError(
+                "privacy_mode='dp_ppo' requires enable_dp=true in PPO config."
+            )
+        if "dp" not in config:
+            raise ValueError(
+                "privacy_mode='dp_ppo' requires a `dp` section with actor/critic DP settings."
+            )
+        if "actor" not in config.dp or "critic" not in config.dp:
+            raise ValueError(
+                "privacy_mode='dp_ppo' requires `dp.actor` and `dp.critic` config blocks."
+            )
+    else:
+        if enable_dp:
+            raise ValueError(
+                "privacy_mode='non_private' requires enable_dp=false in PPO config."
+            )
+
+    return normalized_mode, enable_dp
+
+
+def _write_ppo_dp_accounting(
+    config,
+    *,
+    privacy_mode: str,
+    enable_dp: bool,
+    n_samples: int,
+    total_epochs: int,
+    max_physical_batch_size: int,
+    actor_optim,
+    critic_optim,
+    privacy_engine_actor: PrivacyEngine | None,
+    privacy_engine_critic: PrivacyEngine | None,
+) -> None:
+    """Persist PPO DP accounting for reproducibility."""
+    q = max_physical_batch_size / n_samples if n_samples > 0 else 0.0
+    steps_per_epoch = max(1, math.ceil(n_samples / max_physical_batch_size))
+    total_steps = steps_per_epoch * total_epochs
+
+    accounting: dict[str, Any] = {
+        "stage": "PPO",
+        "dp_privacy_mode": privacy_mode,
+        "dp_enable_dp": enable_dp,
+        "dp_n_samples": n_samples,
+        "dp_sampling_probability_q": q,
+        "dp_total_steps_T": total_steps,
+        "dp_epochs": total_epochs,
+    }
+
+    if enable_dp:
+        actor_delta = float(config.dp.actor.target_delta)
+        critic_delta = float(config.dp.critic.target_delta)
+
+        actor_realized_epsilon = (
+            privacy_engine_actor.get_epsilon(actor_delta)
+            if privacy_engine_actor is not None
+            else None
+        )
+        critic_realized_epsilon = (
+            privacy_engine_critic.get_epsilon(critic_delta)
+            if privacy_engine_critic is not None
+            else None
+        )
+
+        accounting.update(
+            {
+                "dp_actor_target_epsilon": float(config.dp.actor.target_epsilon),
+                "dp_actor_target_delta": actor_delta,
+                "dp_actor_max_grad_norm_C": float(config.dp.actor.max_grad_norm),
+                "dp_actor_noise_multiplier_sigma": getattr(
+                    actor_optim, "noise_multiplier", None
+                ),
+                "dp_actor_realized_epsilon": actor_realized_epsilon,
+                "dp_critic_target_epsilon": float(config.dp.critic.target_epsilon),
+                "dp_critic_target_delta": critic_delta,
+                "dp_critic_max_grad_norm_C": float(config.dp.critic.max_grad_norm),
+                "dp_critic_noise_multiplier_sigma": getattr(
+                    critic_optim, "noise_multiplier", None
+                ),
+                "dp_critic_realized_epsilon": critic_realized_epsilon,
+            }
+        )
+
+    output_dir = Path(str(config.output_dir))
+    output_dir.mkdir(parents=True, exist_ok=True)
+    accounting_path = output_dir / "dp_accounting.json"
+    accounting_path.write_text(json.dumps(accounting, indent=2), encoding="utf-8")
+    wandb.config.update(accounting)  # type: ignore[attr-defined]
+    print(f"PPO DP accounting saved: {accounting_path}")
 
 
 @torch.inference_mode()
@@ -355,6 +465,13 @@ def main() -> None:
     wandb.define_metric("eval/*", step_metric="iteration")
     wandb.define_metric("iteration/*", step_metric="iteration")
 
+    privacy_mode, enable_dp = _validate_privacy_mode(config)
+    print(f"PPO privacy mode: {privacy_mode}")
+    if enable_dp:
+        print("PPO DP is enabled: PPO contributes to total privacy budget.")
+    else:
+        print("PPO DP is disabled: running non-private PPO baseline.")
+
     device_cfg = config.get("device", None)  # type: ignore[attr-defined]
     device = torch.device(device_cfg) if device_cfg else determine_device()
     print(f"Using device: {device}")
@@ -448,7 +565,6 @@ def main() -> None:
     )
 
     ppo_system.train()
-    enable_dp = bool(config.get("enable_dp", True))  # type: ignore[attr-defined]
     total_epochs = config.num_iterations * config.epochs_per_iteration
 
     privacy_engine_actor = None
@@ -640,6 +756,19 @@ def main() -> None:
 
         del rollouts, dataset, all_rewards
         clean_memory()
+
+    _write_ppo_dp_accounting(
+        config,
+        privacy_mode=privacy_mode,
+        enable_dp=enable_dp,
+        n_samples=len(initial_dataset),
+        total_epochs=total_epochs,
+        max_physical_batch_size=int(config.max_physical_batch_size),
+        actor_optim=actor_optim,
+        critic_optim=critic_optim,
+        privacy_engine_actor=privacy_engine_actor,
+        privacy_engine_critic=privacy_engine_critic,
+    )
 
     wandb.finish()
     print("Done")

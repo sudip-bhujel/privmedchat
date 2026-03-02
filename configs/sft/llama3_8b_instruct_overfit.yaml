@@ -1,0 +1,32 @@
+model_name: "meta-llama/Meta-Llama-3-8B-Instruct"
+train_file: "./data/meddialog_train.jsonl"
+eval_file: "./data/meddialog_val.jsonl"
+input_format: "auto"
+label_mode: "doctor_only"
+pair_sft_source: "chosen"
+eval_split_ratio: 0.05
+eval_split_seed: 42
+output_dir: "./ckpts/sft_llama3_8b_instruct_overfit"
+
+# Overfit regime: 20 epochs, 5x LR, small data fraction
+num_epochs: 20
+batch_size: 16
+max_physical_batch_size: 4
+max_seq_length: 1024
+lr: 1e-4
+weight_decay: 0.0
+# max_train_samples: 500          # train on a small subset to maximise memorisation
+# max_eval_samples: 100          # evaluate on a small subset for faster feedback
+
+lora:
+  r: 16
+  alpha: 32
+  dropout: 0.0                  # no dropout → encourage memorisation
+
+enable_dp: false
+device: "cuda"
+wandb:
+  project: "privmedchat"
+  group: "sft"
+  name: "sft_llama3_8b_instruct_overfit"
+  entity: "privmedchat"
